@@ -157,7 +157,7 @@ class TestDistributed(unittest.TestCase):
 
     @parameterized.expand(
         [
-            [4, 128, 128, 8, 4, 512, 8, 2, 1e-4],
+            [4, 128, 128, 8, 4, 512, 8, 2, 1e-3],
         ]
     )
     def test_distributed_model(
@@ -197,15 +197,20 @@ class TestDistributed(unittest.TestCase):
             dtype=torch.float32,
             device=self.device,
         )
+        tar = torch.randn(
+            (batch, chans, H, W),
+            dtype=torch.float32,
+            device=self.device,
+        )
         inp.requires_grad = True
-
+        autocast_dtype = torch.float16
         # forward pass
-        with torch.autocast(device_type=inp.device.type, dtype=torch.float16):
+        with torch.autocast(device_type=inp.device.type, dtype=autocast_dtype):
             out = model(inp)
-        # loss = nn.MSELoss()(out, inp)
-        # loss.backward()
+            loss = torch.mean((out - tar)**2)
+        loss.backward()
 
-        # inp_grad = inp.grad.clone()
+        inp_grad = inp.grad.clone()
 
         #############################################################
         # distributed op
@@ -241,13 +246,15 @@ class TestDistributed(unittest.TestCase):
         with torch.no_grad():
             # dp split that dataloaders take care of usually
             inp_local = scatter_to_parallel_region(inp, dim=0, comm_name="dp")
+            tar_local = scatter_to_parallel_region(tar, dim=0, comm_name="dp")
         inp_local.requires_grad = True
-        with torch.autocast(device_type=inp.device.type, dtype=torch.float16):
-            out_local = model_distributed(inp_local)
 
-        # loss = nn.MSELoss()(out_local, inp_local)
-        # loss.backward()
-        # inp_grad_local = inp_local.grad.clone()
+        with torch.autocast(device_type=inp.device.type, dtype=autocast_dtype):
+            out_local = model_distributed(inp_local)
+            loss = torch.mean((out_local - tar_local)**2)
+
+        loss.backward()
+        inp_grad_local = inp_local.grad.clone()
 
         ############################################################
         # evaluate forward pass
@@ -263,6 +270,22 @@ class TestDistributed(unittest.TestCase):
             )
             if self.print_to_screen:
                 print(f"final relative error of output in model: {err.item()}")
+        self.assertTrue(err.item() <= tolerance)
+
+        #############################################################
+        # evaluate backward pass
+        #############################################################
+        with torch.no_grad():
+            inp_grad_gather = gather_from_parallel_region(
+                inp_grad_local, dim=0, shapes=None, comm_name="dp"
+            ) / comm.get_size("dp")
+            err = torch.mean(
+                torch.norm(inp_grad - inp_grad_gather, p=2, dim=(1, 2, 3))
+                / torch.norm(inp_grad, p=2, dim=(1, 2, 3))
+            )
+            if self.print_to_screen:
+                print(f"final relative error of input gradients in model: {err.item()}")
+
         self.assertTrue(err.item() <= tolerance)
 
 
