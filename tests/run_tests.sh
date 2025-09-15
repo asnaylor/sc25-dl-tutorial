@@ -1,6 +1,6 @@
 #!/bin/bash
 
-image=nersc/pytorch:24.06.02
+image=nersc/pytorch:25.02.01
 dp=1
 tp=1
 cp=1
@@ -25,8 +25,8 @@ export MASTER_ADDR=$(hostname)
 srun --nodes $nodes --ntasks-per-node $ngpu_per_node --gpus-per-node $ngpu_per_node -u shifter --image=$image --module=gpu,nccl-plugin \
     bash -c "
     source export_DDP_vars.sh
+    export NVIDIA_TF32_OVERRIDE=0
     export TP=${tp}
     export CP=${cp}
-    export NVIDIA_TF32_OVERRIDE=0
-    python -m pytest -s tests/test_distributed.py
+    python -m pytest -s tests/test_all.py
     "
