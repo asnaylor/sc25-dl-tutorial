@@ -30,7 +30,6 @@ class MLP(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-
         if comm.get_size("tp-cp") > 1:
             tp_group = comm.get_group("tp")
             tp_size = comm.get_size("tp")
@@ -293,7 +292,6 @@ class VisionTransformer(nn.Module):
             ]
         )
 
-        self.norm = norm_layer(embed_dim)
 
         self.out_size = self.out_ch * self.patch_size * self.patch_size
 
@@ -340,7 +338,6 @@ class VisionTransformer(nn.Module):
         # if cp is on, each block operates on a sequence shard
         for blk in self.blocks:
             x = blk(x)
-        x = self.norm(x)
 
         # gather sequence if cp is on
         x = gather_from_parallel_region(x, dim=1, shapes=self.cp_shapes, comm_name="cp")

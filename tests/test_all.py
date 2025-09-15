@@ -58,7 +58,7 @@ class TestDistributed(unittest.TestCase):
                 print("Running test on CPU")
             cls.device = torch.device("cpu")
             cls.comm_backend = "gloo"
-            torch.manual_seed(333)
+        torch.manual_seed(333)
 
         if cls.world_size > 1:
             # create tcp store
@@ -157,7 +157,7 @@ class TestDistributed(unittest.TestCase):
 
     @parameterized.expand(
         [
-            [4, 128, 128, 8, 4, 256, 8, 2, 1e-4],
+            [4, 128, 128, 8, 4, 512, 8, 2, 1e-4],
         ]
     )
     def test_distributed_model(
@@ -249,9 +249,9 @@ class TestDistributed(unittest.TestCase):
         # loss.backward()
         # inp_grad_local = inp_local.grad.clone()
 
-        #############################################################
+        ############################################################
         # evaluate forward pass
-        #############################################################
+        ############################################################
         with torch.no_grad():
             # compute error over spatial dimensions
             out_gather = gather_from_parallel_region(
