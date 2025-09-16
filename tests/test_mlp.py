@@ -7,7 +7,7 @@ import datetime as dt
 from utils.rank_generator import RankGenerator
 from utils import comm
 
-from networks.vit_te import VisionTransformer
+from networks.vit_te import MLP
 from parameterized import parameterized
 from distributed.helpers import (
     compute_split_shapes,
@@ -103,23 +103,11 @@ class TestDistributed(unittest.TestCase):
         tp_cp_size = comm.get_size("tp-cp")
 
         all_grads = []
-        col_sharded_layers = ["fc2", "attn.proj"]  # need to gather differently
+        col_sharded_layers = ["fc2"]  # need to gather differently
 
-        if model.pos_embed.grad is not None:
-            all_grads.append(model.pos_embed.grad.view(-1))
-
-        # Handle patch embed gradients (shared in both tp and cp)
-        if model.patch_embed.proj.weight.grad is not None:
-            all_grads.append(model.patch_embed.proj.weight.grad.view(-1))
-        if (
-            hasattr(model.patch_embed.proj, "bias")
-            and model.patch_embed.proj.bias.grad is not None
-        ):
-            all_grads.append(model.patch_embed.proj.bias.grad.view(-1))
-
-        # Handle transformer block gradients
+        # Handle mlp block gradients
         for name, param in model.named_parameters():
-            if "blocks" in name and param.grad is not None:
+            if param.grad is not None:
                 is_shared_tp = hasattr(param, "is_shared_mp") and any(
                     "tp" in group for group in param.is_shared_mp
                 )
@@ -137,10 +125,6 @@ class TestDistributed(unittest.TestCase):
                         grad = torch.cat([g.view(-1) for g in gathered_grads])
                     all_grads.append(grad)
 
-        # Handle head gradients (shared in both tp-cp)
-        if model.head.weight.grad is not None:
-            all_grads.append(model.head.weight.grad.view(-1))
-
         return (
             torch.cat(all_grads) if all_grads else torch.tensor([], device=self.device)
         )
@@ -156,78 +140,27 @@ class TestDistributed(unittest.TestCase):
         # copy sharded weights and biases for fc1
         start = rank_tp * embed_local
         end = start + embed_local
-        mlp_layer_distributed.fc1.weight.copy_(mlp_layer.fc1.weight[start:end, :])
-        mlp_layer_distributed.fc1.bias.copy_(
-            mlp_layer.fc1.bias[start:end]
-        )
-        # copy sharded weights for fc2
-        mlp_layer_distributed.fc2.weight.copy_(mlp_layer.fc2.weight[:, start:end])
-        # copy shared bias for fc2 across all shards
-        mlp_layer_distributed.fc2.bias.copy_(mlp_layer.fc2.bias)
-
-    def _copy_attn_weights(self, attn_layer, attn_layer_distributed):
-        """copy the weights, bias of attn into the correct shard of attn_dist"""
-        tp = comm.get_size("tp")
-        embed = attn_layer.proj.weight.shape[1]
-        embed_local = embed // tp
-        rank_tp = comm.get_rank("tp")  # which tp rank
-
-        # copy sharded weights and biases for qkv
-        start = rank_tp * embed_local
-        end = start + embed_local
-        attn_layer_distributed.q.weight.copy_(attn_layer.q.weight[start:end, :])
-        attn_layer_distributed.q.bias.copy_(
-            attn_layer.q.bias[start:end]
-        )
-        attn_layer_distributed.k.weight.copy_(attn_layer.k.weight[start:end, :])
-        attn_layer_distributed.k.bias.copy_(
-            attn_layer.k.bias[start:end]
-        )
-        attn_layer_distributed.v.weight.copy_(attn_layer.v.weight[start:end, :])
-        attn_layer_distributed.v.bias.copy_(
-            attn_layer.v.bias[start:end]
-        )
-        # copy sharded weights for proj
-        start = rank_tp * embed_local
-        end = start + embed_local
-        attn_layer_distributed.proj.weight.copy_(
-            attn_layer.proj.weight[:, start:end]
-        )
-        attn_layer_distributed.proj.bias.copy_(attn_layer.proj.bias)
-
-    def _copy_vit_weights(self, model, model_distributed):
-        """copy the weights of the model into the correct shard of model_distributed"""
         with torch.no_grad():
-            # copy patch embed weights
-            model_distributed.patch_embed.proj.weight.copy_(model.patch_embed.proj.weight)
-            model_distributed.patch_embed.proj.bias.copy_(model.patch_embed.proj.bias)
-            # copy pos embed weights
-            model_distributed.pos_embed.copy_(model.pos_embed)
-            for block, block_distributed in zip(model.blocks, model_distributed.blocks):
-                self._copy_mlp_weights(block.mlp, block_distributed.mlp)
-                self._copy_attn_weights(block.attn, block_distributed.attn)
-                # copy norm weights
-                block_distributed.norm1.weight.copy_(block.norm1.weight)
-                block_distributed.norm1.bias.copy_(block.norm1.bias)
-                block_distributed.norm2.weight.copy_(block.norm2.weight)
-                block_distributed.norm2.bias.copy_(block.norm2.bias)
-            # copy head weights
-            model_distributed.head.weight.copy_(model.head.weight)
+            mlp_layer_distributed.fc1.weight.copy_(mlp_layer.fc1.weight[start:end, :])
+            mlp_layer_distributed.fc1.bias.copy_(
+                mlp_layer.fc1.bias[start:end]
+            )
+            # copy sharded weights for fc2
+            mlp_layer_distributed.fc2.weight.copy_(mlp_layer.fc2.weight[:, start:end])
+            # copy shared bias for fc2 across all shards
+            mlp_layer_distributed.fc2.bias.copy_(mlp_layer.fc2.bias)
+ 
 
     @parameterized.expand(
         [
-            [4, 128, 128, 8, 4, 512, 8, 2, 1e-1],
+            [4, 256, 32, 2, 1e-1],
         ]
     )
     def test_distributed_model(
         self,
         batch,
-        H,
-        W,
-        patch_size,
-        chans,
+        seq,
         embed,
-        heads,
         depth,
         tolerance,
     ):
@@ -239,25 +172,20 @@ class TestDistributed(unittest.TestCase):
         comm_groups = list(comm._COMM_GROUPS.keys())
         for old_group in comm_groups:
             old_groups[old_group] = comm._COMM_GROUPS.pop(old_group, None)
-        model = VisionTransformer(
-            img_size=[H, W],
-            patch_size=patch_size,
-            in_chans=chans,
-            out_chans=chans,
-            embed_dim=embed,
-            depth=depth,
-            num_heads=heads,
+        model = MLP(
+            in_features=embed,
+            hidden_features=4 * embed,
         ).to(self.device)
         model.zero_grad(set_to_none=True)
 
         # create tensor in BHWC format
         inp = torch.randn(
-            (batch, chans, H, W),
+            (batch, seq, embed),
             dtype=torch.float32,
             device=self.device,
         )
         tar = torch.randn(
-            (batch, chans, H, W),
+            (batch, seq, embed),
             dtype=torch.float32,
             device=self.device,
         )
@@ -280,14 +208,9 @@ class TestDistributed(unittest.TestCase):
             if group is not None:
                 comm._COMM_GROUPS[group_name] = group
 
-        model_distributed = VisionTransformer(
-            img_size=[H, W],
-            patch_size=patch_size,
-            in_chans=chans,
-            out_chans=chans,
-            embed_dim=embed,
-            depth=depth,
-            num_heads=heads,
+        model_distributed = MLP(
+            in_features=embed,
+            hidden_features=4 * embed,
         ).to(self.device)
         model_distributed.zero_grad(set_to_none=True)
 
@@ -300,18 +223,20 @@ class TestDistributed(unittest.TestCase):
         )
 
         # sync the weights
-        self._copy_vit_weights(model, model_distributed.module)
+        self._copy_mlp_weights(model, model_distributed.module)
 
         # forward pass
         with torch.no_grad():
             # dp split that dataloaders take care of usually
             inp_local = scatter_to_parallel_region(inp, dim=0, comm_name="dp")
+            inp_local = scatter_to_parallel_region(inp_local, dim=1, comm_name="cp")
             tar_local = scatter_to_parallel_region(tar, dim=0, comm_name="dp")
+            tar_local = scatter_to_parallel_region(tar_local, dim=1, comm_name="cp")
         inp_local.requires_grad = True
 
         with torch.autocast(device_type=inp.device.type, dtype=autocast_dtype):
             out_local = model_distributed(inp_local)
-            loss = torch.mean((out_local - tar_local)**2)
+            loss = torch.mean((out_local - tar_local)**2) 
 
         loss.backward()
         inp_grad_local = inp_local.grad.clone()
@@ -324,9 +249,12 @@ class TestDistributed(unittest.TestCase):
             out_gather = gather_from_parallel_region(
                 out_local, dim=0, shapes=None, comm_name="dp"
             )
+            out_gather = gather_from_parallel_region(
+                out_gather, dim=1, shapes=None, comm_name="cp"
+            )
             err = torch.mean(
-                torch.norm(out - out_gather, p=2, dim=(1, 2, 3))
-                / torch.norm(out, p=2, dim=(1, 2, 3))
+                torch.norm(out - out_gather, p=2, dim=(1, 2))
+                / torch.norm(out, p=2, dim=(1, 2))
             )
             if self.print_to_screen:
                 print(f"final relative error of output in model: {err.item()}")
@@ -339,9 +267,12 @@ class TestDistributed(unittest.TestCase):
             inp_grad_gather = gather_from_parallel_region(
                 inp_grad_local, dim=0, shapes=None, comm_name="dp"
             ) / comm.get_size("dp")
+            inp_grad_gather = gather_from_parallel_region(
+                inp_grad_gather, dim=1, shapes=None, comm_name="cp"
+            ) / comm.get_size("cp")
             err = torch.mean(
-                torch.norm(inp_grad - inp_grad_gather, p=2, dim=(1, 2, 3))
-                / torch.norm(inp_grad, p=2, dim=(1, 2, 3))
+                torch.norm(inp_grad - inp_grad_gather, p=2, dim=(1, 2))
+                / torch.norm(inp_grad, p=2, dim=(1, 2))
             )
             if self.print_to_screen:
                 print(f"final relative error of input gradients in model: {err.item()}")
@@ -349,7 +280,7 @@ class TestDistributed(unittest.TestCase):
         #############################################################
         # evaluate wgrads
         #############################################################
-        dist_grads_full = self._get_reconstructed_grads(model_distributed.module)
+        dist_grads_full = self._get_reconstructed_grads(model_distributed.module) / comm.get_size("cp")
         # Compare with the non-distributed gradients
         grad_diff = non_dist_grads - dist_grads_full
         err = grad_diff.norm().item() / non_dist_grads.norm().item()

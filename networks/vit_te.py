@@ -60,6 +60,16 @@ class MLP(nn.Module):
         )
         self.drop = nn.Dropout(drop)
 
+        # mark weights
+        self.fc1.weight.is_shared_mp = ["cp"]
+        self.fc1.weight.mark_for_reduction = ["cp"]
+        self.fc1.bias.is_shared_mp = ["cp"]
+        self.fc1.bias.mark_for_reduction = ["cp"]
+        self.fc2.weight.is_shared_mp = ["cp"]
+        self.fc2.weight.mark_for_reduction = ["cp"]
+        self.fc2.bias.is_shared_mp = ["tp-cp"] # careful : output has joined, so shared across tp-cp
+        self.fc2.bias.mark_for_reduction = ["cp"]
+
     def forward(self, x):
         x = self.fc1(x)
         x = self.act(x)
@@ -91,6 +101,10 @@ class Attention(nn.Module):
             cp_size = 1
             cp_ranks = []
             cp_stream = None
+
+        # tp shards heads
+        self.num_heads_local = num_heads // tp_size
+
 
         # should we just use MHA and ditch QKV proj?
         self.q = te.Linear(
@@ -153,16 +167,34 @@ class Attention(nn.Module):
         )
         self.proj_drop = nn.Dropout(proj_drop)
 
+        # mark weights
+        self.q.weight.is_shared_mp = ["cp"]
+        self.q.weight.mark_for_reduction = ["cp"]
+        self.q.bias.is_shared_mp = ["cp"]
+        self.q.bias.mark_for_reduction = ["cp"]
+        self.k.weight.is_shared_mp = ["cp"]
+        self.k.weight.mark_for_reduction = ["cp"]
+        self.k.bias.is_shared_mp = ["cp"]
+        self.k.bias.mark_for_reduction = ["cp"]
+        self.v.weight.is_shared_mp = ["cp"]
+        self.v.weight.mark_for_reduction = ["cp"]
+        self.v.bias.is_shared_mp = ["cp"]
+        self.v.bias.mark_for_reduction = ["cp"]
+        self.proj.weight.is_shared_mp = ["cp"]
+        self.proj.weight.mark_for_reduction = ["cp"]
+        self.proj.bias.is_shared_mp = ["tp-cp"] # careful : output has joined, so shared across tp-cp
+        self.proj.bias.mark_for_reduction = ["cp"]
+
     def forward(self, x):
         B, N, C = x.shape
 
         # Compute q, k, v projections
-        q = self.q(x).reshape(B, N, self.num_heads, self.head_dim).contiguous()
-        k = self.k(x).reshape(B, N, self.num_heads, self.head_dim).contiguous()
-        v = self.v(x).reshape(B, N, self.num_heads, self.head_dim).contiguous()
+        q = self.q(x).reshape(B, N, self.num_heads_local, self.head_dim).contiguous()
+        k = self.k(x).reshape(B, N, self.num_heads_local, self.head_dim).contiguous()
+        v = self.v(x).reshape(B, N, self.num_heads_local, self.head_dim).contiguous()
 
         x = self.attention(q, k, v)
-        x = x.reshape(B, N, C)
+        x = x.reshape(B, N, self.num_heads_local * self.head_dim)
 
         x = self.proj(x)
         x = self.proj_drop(x)
