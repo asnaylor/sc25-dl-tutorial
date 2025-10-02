@@ -1,40 +1,52 @@
 import os
 import logging
 
-_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
 
 def slurm_filter(record):
-  return int(os.environ['SLURM_PROCID']) == 0
+    return int(os.environ["SLURM_PROCID"]) == 0
+
 
 def config_logger(log_level=logging.INFO):
-  logging.basicConfig(format=_format, level=log_level)
-  root_logger = logging.getLogger()
-  root_logger.addFilter(slurm_filter)
+    logging.basicConfig(format=_format, level=log_level)
+    root_logger = logging.getLogger()
+    root_logger.addFilter(slurm_filter)
 
-def log_to_file(logger_name=None, log_level=logging.INFO, log_filename='tensorflow.log'):
 
-  if not os.path.exists(os.path.dirname(log_filename)):
-    os.makedirs(os.path.dirname(log_filename))
+def log_to_file(
+    logger_name=None, log_level=logging.INFO, log_filename="tensorflow.log"
+):
 
-  if logger_name is not None:
-    log = logging.getLogger(logger_name)
-  else:
-    log = logging.getLogger()
+    if not os.path.exists(os.path.dirname(log_filename)):
+        os.makedirs(os.path.dirname(log_filename))
 
-  fh = logging.FileHandler(log_filename)
-  fh.setLevel(log_level)
-  fh.setFormatter(logging.Formatter(_format))
-  log.addHandler(fh)
+    if logger_name is not None:
+        log = logging.getLogger(logger_name)
+    else:
+        log = logging.getLogger()
+
+    fh = logging.FileHandler(log_filename)
+    fh.setLevel(log_level)
+    fh.setFormatter(logging.Formatter(_format))
+    log.addHandler(fh)
+
 
 def log_versions():
-  import torch
-  import subprocess
+    import torch
+    import subprocess
 
-  logging.info('--------------- Versions ---------------')
-  logging.info('git branch: ' + str(subprocess.check_output(['git', 'branch']).strip()))
-  logging.info('git hash: ' + str(subprocess.check_output(['git', 'rev-parse', 'HEAD']).strip()))
-  logging.info('Torch: ' + str(torch.__version__))
-  logging.info('----------------------------------------')
+    logging.info("--------------- Versions ---------------")
+    logging.info(
+        "git branch: " + str(subprocess.check_output(["git", "branch"]).strip())
+    )
+    logging.info(
+        "git hash: "
+        + str(subprocess.check_output(["git", "rev-parse", "HEAD"]).strip())
+    )
+    logging.info("Torch: " + str(torch.__version__))
+    logging.info("----------------------------------------")
+
 
 class disable_logging(object):
     """

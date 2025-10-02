@@ -13,7 +13,7 @@ from distributed.mappings import (
     gather_from_parallel_region,
     all_gather_from_parallel_region,
     reduce_from_parallel_region,
-    reduce_scatter_to_parallel_region
+    reduce_scatter_to_parallel_region,
 )
 from typing import Tuple
 
@@ -25,7 +25,7 @@ class DistributedMatmul(nn.Module):
     W is a (in_dim, out_dim) size matrix when unsharded
     So shape of W is either (in_dim/n, out_dim) or (in_dim, out_dim/n)
     X is assumed sharded similarly to match the dimensions
-    comm_act_name is an orthogonal comm used for sharding the activation 
+    comm_act_name is an orthogonal comm used for sharding the activation
     X using m procs (batch_seq/m, in_dim)
     """
 
@@ -35,7 +35,7 @@ class DistributedMatmul(nn.Module):
         out_dim,
         comm_inp_name,
         comm_out_name,
-        comm_act_name='cp',
+        comm_act_name="cp",
         bias=True,
     ):
         super(DistributedMatmul, self).__init__()
@@ -46,8 +46,8 @@ class DistributedMatmul(nn.Module):
         comm_inp_size = comm.get_size(self.comm_inp_name)
         comm_out_size = comm.get_size(self.comm_out_name)
 
-        assert (
-            not (comm_inp_size > 1 and comm_out_size > 1)
+        assert not (
+            comm_inp_size > 1 and comm_out_size > 1
         ), "Error, weights are sharded in a 2D fashion, not supported currently"
         assert (
             inp_dim % comm_inp_size == 0
@@ -62,14 +62,20 @@ class DistributedMatmul(nn.Module):
 
         # parameters
         self.weight = nn.Parameter(torch.ones(out_dim_local, inp_dim_local))
-        self.weight.is_shared_mp = [comm_act_name] # weights are sharded in tp but shared across cp
-        self.weight.mark_for_reduction = [comm_act_name] # shared weights must be additionally reduced
+        self.weight.is_shared_mp = [
+            comm_act_name
+        ]  # weights are sharded in tp but shared across cp
+        self.weight.mark_for_reduction = [
+            comm_act_name
+        ]  # shared weights must be additionally reduced
         if bias:
             self.bias = nn.Parameter(torch.ones(1, 1, out_dim_local))
             # if inp dim of W is sharded, then the bias is shared across this group and also
             # shared in cp grp
             self.bias.is_shared_mp = [self.comm_inp_name, comm_act_name]
-            self.bias.mark_for_reduction = [comm_act_name] # shared bias must be additionally reduced
+            self.bias.mark_for_reduction = [
+                comm_act_name
+            ]  # shared bias must be additionally reduced
 
         # init weights
         self._init_weights()
@@ -79,12 +85,10 @@ class DistributedMatmul(nn.Module):
         if hasattr(self, "bias"):
             nn.init.constant_(self.bias, 0.0)
 
-    # since this method is full of custom autograd, it cannot be jitted from torch frontend.
-    @torch.jit.ignore
     def forward(self, x):
         x_cp = copy_to_parallel_region(x, self.comm_out_name)
         # don't add bias (else allreduce will add it too often)
-        x_loc = F.linear(x_cp, self.weight, bias=None) 
+        x_loc = F.linear(x_cp, self.weight, bias=None)
         x_out = reduce_from_parallel_region(x_loc, self.comm_inp_name)
         if hasattr(self, "bias"):
             x_out = x_out + self.bias
@@ -101,8 +105,8 @@ class DistributedMLP(nn.Module):
         in_features,
         hidden_features=None,
         out_features=None,
-        comm_tp_name='tp',
-        comm_cp_name='cp',
+        comm_tp_name="tp",
+        comm_cp_name="cp",
         act_layer=nn.GELU,
         drop=0.0,
     ):
@@ -147,13 +151,13 @@ class DistributedAttention(nn.Module):
     def __init__(
         self,
         dim,
-        comm_tp_name='tp',
-        comm_cp_name='cp',
+        comm_tp_name="tp",
+        comm_cp_name="cp",
         cp_shapes=None,
         num_heads=8,
         qkv_bias=False,
         attn_drop=0.0,
-        proj_drop=0.0
+        proj_drop=0.0,
     ):
 
         super(DistributedAttention, self).__init__()
@@ -175,43 +179,68 @@ class DistributedAttention(nn.Module):
         self.cp_shapes = cp_shapes
 
         # qkv is col parallel in the weights
-        self.q = DistributedMatmul(dim, dim,
-            comm_inp_name=None, 
-            comm_out_name=comm_tp_name, 
+        self.q = DistributedMatmul(
+            dim,
+            dim,
+            comm_inp_name=None,
+            comm_out_name=comm_tp_name,
             bias=qkv_bias,
-            comm_act_name=comm_cp_name
+            comm_act_name=comm_cp_name,
         )
-        self.k = DistributedMatmul(dim, dim,
-            comm_inp_name=None, 
-            comm_out_name=comm_tp_name, 
+        self.k = DistributedMatmul(
+            dim,
+            dim,
+            comm_inp_name=None,
+            comm_out_name=comm_tp_name,
             bias=qkv_bias,
-            comm_act_name=comm_cp_name
+            comm_act_name=comm_cp_name,
         )
-        self.v = DistributedMatmul(dim, dim,
-            comm_inp_name=None, 
-            comm_out_name=comm_tp_name, 
+        self.v = DistributedMatmul(
+            dim,
+            dim,
+            comm_inp_name=None,
+            comm_out_name=comm_tp_name,
             bias=qkv_bias,
-            comm_act_name=comm_cp_name
+            comm_act_name=comm_cp_name,
         )
         self.attn_drop = nn.Dropout(attn_drop)
 
         # proj is row parallel in the weights
         self.proj = DistributedMatmul(
-            dim, dim, comm_inp_name=comm_tp_name, comm_out_name=None,
-            comm_act_name=comm_cp_name
+            dim,
+            dim,
+            comm_inp_name=comm_tp_name,
+            comm_out_name=None,
+            comm_act_name=comm_cp_name,
         )
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, x):
         # note: N is local sequence shard if CP is on
         B, N, C = x.shape
-    
-        q = self.q(x).reshape(B, N, self.num_heads_local, self.head_dim).permute(0, 2, 1, 3)
-        k = self.k(x).reshape(B, N, self.num_heads_local, self.head_dim).permute(0, 2, 1, 3)
-        v = self.v(x).reshape(B, N, self.num_heads_local, self.head_dim).permute(0, 2, 1, 3)
 
-        k = all_gather_from_parallel_region(k, dim=2, shapes=self.cp_shapes, comm_name=self.comm_cp_name)
-        v = all_gather_from_parallel_region(v, dim=2, shapes=self.cp_shapes, comm_name=self.comm_cp_name)
+        q = (
+            self.q(x)
+            .reshape(B, N, self.num_heads_local, self.head_dim)
+            .permute(0, 2, 1, 3)
+        )
+        k = (
+            self.k(x)
+            .reshape(B, N, self.num_heads_local, self.head_dim)
+            .permute(0, 2, 1, 3)
+        )
+        v = (
+            self.v(x)
+            .reshape(B, N, self.num_heads_local, self.head_dim)
+            .permute(0, 2, 1, 3)
+        )
+
+        k = all_gather_from_parallel_region(
+            k, dim=2, shapes=self.cp_shapes, comm_name=self.comm_cp_name
+        )
+        v = all_gather_from_parallel_region(
+            v, dim=2, shapes=self.cp_shapes, comm_name=self.comm_cp_name
+        )
 
         if self.fused_attn:
             x = F.scaled_dot_product_attention(
@@ -239,36 +268,43 @@ class DistributedAttention(nn.Module):
 
         return x
 
+
 class DistributedLayerNorm(nn.Module):
-    """ 
-    Distributed layer norm layer 
+    """
+    Distributed layer norm layer
     Sequence parallel only
     """
-    def __init__(self,
-                 normalized_shape,
-                 eps=1e-05,
-                 elementwise_affine=True,
-                 bias=True,
-                 device=None,
-                 dtype=None,
-                 comm_tp_name='tp',
-                 comm_cp_name='cp'):
+
+    def __init__(
+        self,
+        normalized_shape,
+        eps=1e-05,
+        elementwise_affine=True,
+        bias=True,
+        device=None,
+        dtype=None,
+        comm_tp_name="tp",
+        comm_cp_name="cp",
+    ):
         super(DistributedLayerNorm, self).__init__()
-         
-        self.norm = nn.LayerNorm(normalized_shape,
-                                 eps=eps,
-                                 elementwise_affine=elementwise_affine,
-                                 bias=bias, device=device, dtype=dtype)
+
+        self.norm = nn.LayerNorm(
+            normalized_shape,
+            eps=eps,
+            elementwise_affine=elementwise_affine,
+            bias=bias,
+            device=device,
+            dtype=dtype,
+        )
 
         if elementwise_affine:
-            # affine weights need additional allreduce and are shared 
+            # affine weights need additional allreduce and are shared
             # across all groups
             self.norm.weight.is_shared_mp = [comm_tp_name, comm_cp_name]
             self.norm.weight.mark_for_reduction = [comm_cp_name]
             if bias:
                 self.norm.bias.is_shared_mp = [comm_tp_name, comm_cp_name]
                 self.norm.bias.mark_for_reduction = [comm_cp_name]
-
 
     def forward(self, x):
         return self.norm(x)

@@ -55,6 +55,8 @@ def train(params, args, local_rank, world_rank, world_size):
     model = vit.ViT(params).to(device)
 
     if params.enable_jit:
+#        if params.distributed and not args.noddp:
+#            torch._dynamo.config.optimize_ddp = False
         model = torch.compile(model)
 
     if params.amp_dtype == torch.float16:
@@ -375,14 +377,16 @@ if __name__ == "__main__":
         amp_dtype = torch.float16
     elif params.amp_mode == "bf16":
         amp_dtype = torch.bfloat16
+
     params.update(
-        {
-            "amp_enabled": amp_dtype is not torch.float32,
-            "amp_dtype": amp_dtype,
-            "enable_fused": args.enable_fused,
-            "enable_jit": args.enable_jit,
-        }
+        {"amp_enabled": amp_dtype is not torch.float32, "amp_dtype": amp_dtype}
     )
+
+    if args.enable_fused:
+        params.update({"enable_fused": args.enable_fused})
+
+    if args.enable_jit:
+        params.update({"enable_jit": args.enable_jit})
 
     if args.data_loader_config:
         params.update({"data_loader_config": args.data_loader_config})

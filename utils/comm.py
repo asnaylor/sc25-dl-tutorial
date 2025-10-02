@@ -158,19 +158,20 @@ def init_model_parallel_info(tp=1, pp=1, dp=1, cp=1, order="tp-dp", verbose=Fals
             if world_rank in ranks:
                 _COMM_GROUPS[grp] = group
 
+
 def process_comm_list(input_list):
-    ''' Given a list of comms, merge them 
-    Ex: ['tp', 'cp'] is ['tp-cp'] 
-    '''
+    """Given a list of comms, merge them
+    Ex: ['tp', 'cp'] is ['tp-cp']
+    """
     if not input_list or all(item is None for item in input_list):
         return []
-    
+
     # filter out None values (ex: [None, 'tp] becomes ['tp'])
     filtered_list = [item for item in input_list if item is not None]
-    
+
     if not filtered_list:
         return []
     elif len(filtered_list) == 1:
         return filtered_list
     else:
-        return ['-'.join(filtered_list)]
+        return ["-".join(filtered_list)]

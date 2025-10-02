@@ -9,10 +9,10 @@ export MASTER_ADDR=$(hostname)
 #export TORCHDYNAMO_VERBOSE=1
 
 set -x
-srun -u -N 1 --ntasks-per-node=1 --gpus-per-node=1 --cpus-per-task=32 shifter --image=nersc/pytorch:24.08.01 -V ${DATADIR}:/data -V ${LOGDIR}:/logs \
+srun -u -N 1 --ntasks-per-node=4 --gpus-per-node=4 --cpus-per-task=32 shifter --image=nersc/pytorch:24.10.01 -V ${DATADIR}:/data -V ${LOGDIR}:/logs \
     bash -c "
     source export_DDP_vars.sh
-    ${PROFILE_CMD} python train.py ${args}
+    ${PROFILE_CMD} python train_mp.py ${args}
     "
 #srun -u -N 1 --ntasks-per-node=4 --gpus-per-node=4 --cpus-per-task=32 shifter --image=nersc/pytorch:24.08.01 -V ${DATADIR}:/data -V ${LOGDIR}:/logs \
 #    bash -c "

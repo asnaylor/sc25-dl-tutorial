@@ -67,7 +67,9 @@ class MLP(nn.Module):
         self.fc1.bias.mark_for_reduction = ["cp"]
         self.fc2.weight.is_shared_mp = ["cp"]
         self.fc2.weight.mark_for_reduction = ["cp"]
-        self.fc2.bias.is_shared_mp = ["tp-cp"] # careful : output has joined, so shared across tp-cp
+        self.fc2.bias.is_shared_mp = [
+            "tp-cp"
+        ]  # careful : output has joined, so shared across tp-cp
         self.fc2.bias.mark_for_reduction = ["cp"]
 
     def forward(self, x):
@@ -104,7 +106,6 @@ class Attention(nn.Module):
 
         # tp shards heads
         self.num_heads_local = num_heads // tp_size
-
 
         # should we just use MHA and ditch QKV proj?
         self.q = te.Linear(
@@ -182,7 +183,9 @@ class Attention(nn.Module):
         self.v.bias.mark_for_reduction = ["cp"]
         self.proj.weight.is_shared_mp = ["cp"]
         self.proj.weight.mark_for_reduction = ["cp"]
-        self.proj.bias.is_shared_mp = ["tp-cp"] # careful : output has joined, so shared across tp-cp
+        self.proj.bias.is_shared_mp = [
+            "tp-cp"
+        ]  # careful : output has joined, so shared across tp-cp
         self.proj.bias.mark_for_reduction = ["cp"]
 
     def forward(self, x):
@@ -324,7 +327,6 @@ class VisionTransformer(nn.Module):
             ]
         )
 
-
         self.out_size = self.out_ch * self.patch_size * self.patch_size
 
         self.head = nn.Linear(embed_dim, self.out_size, bias=False)
@@ -378,7 +380,7 @@ class VisionTransformer(nn.Module):
         return x
 
 
-def ViT(params, **kwargs):
+def ViT_TE(params, **kwargs):
     model = VisionTransformer(
         img_size=params.img_size,
         in_chans=params.n_in_channels,

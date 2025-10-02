@@ -8,11 +8,12 @@
 #SBATCH --time=01:00:00
 #SBATCH --image=nersc/pytorch:24.08.01
 #SBATCH --module=gpu,nccl-plugin
+#SBATCH --reservation=dlscale_training_2
 #SBATCH -J vit-era5
 #SBATCH -o %x-%j.out
 
-DATADIR=/pscratch/sd/s/shas1693/data/sc24_tutorial_data
-LOGDIR=${SCRATCH}/sc24-dl-tutorial/logs
+DATADIR=/pscratch/sd/s/shas1693/data/dl-at-scale-training-data
+LOGDIR=${SCRATCH}/dl-at-scale-training/logs
 mkdir -p ${LOGDIR}
 args="${@}"
 
