@@ -6,12 +6,6 @@ from networks.helpers import DropPath, trunc_normal_
 
 # mp stuff
 from utils import comm
-from distributed.layers import (
-    DistributedMatmul,
-    DistributedMLP,
-    DistributedAttention,
-    DistributedLayerNorm,
-)
 from distributed.helpers import compute_split_shapes
 from distributed.mappings import scatter_to_parallel_region, gather_from_parallel_region
 
@@ -224,6 +218,36 @@ class Attention(nn.Module):
         x = self.proj_drop(x)
         return x
 
+class LayerNorm(nn.Module):
+    def __init__(self, normalized_shape, comm_tp_name="tp", comm_cp_name="cp", eps=1e-05, elementwise_affine=True, bias=True):
+        super().__init__()
+
+        if elementwise_affine:
+            self.norm = te.LayerNorm(
+                normalized_shape, 
+                eps=eps, 
+                bias=bias
+            )
+        else:
+            self.norm = nn.LayerNorm(
+                normalized_shape, 
+                eps=eps, 
+                elementwise_affine=False,
+                bias=bias
+        )
+
+        if elementwise_affine and (comm.get_size("tp-cp") > 1):
+            # affine weights need additional allreduce and are shared
+            # across all groups
+            self.norm.weight.is_shared_mp = [comm_tp_name, comm_cp_name]
+            self.norm.weight.mark_for_reduction = [comm_cp_name]
+            if bias:
+                self.norm.bias.is_shared_mp = [comm_tp_name, comm_cp_name]
+                self.norm.bias.mark_for_reduction = [comm_cp_name]
+
+    def forward(self, x):
+        return self.norm(x)
+
 
 class Block(nn.Module):
     def __init__(
@@ -236,15 +260,16 @@ class Block(nn.Module):
         attn_drop=0.0,
         drop_path=0.0,
         act_layer=nn.GELU,
-        norm_layer=nn.LayerNorm,
+        norm_layer=LayerNorm,
     ):
         super().__init__()
 
         mlp_hidden_dim = int(dim * mlp_ratio)
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
-        self.norm1 = norm_layer(dim)
-        self.norm2 = norm_layer(dim)
+        self.norm1 = norm_layer(dim, comm_tp_name="tp", comm_cp_name="cp")
+        self.norm2 = norm_layer(dim, comm_tp_name="tp", comm_cp_name="cp")
+
         self.attn = Attention(
             dim,
             num_heads=num_heads,
@@ -304,7 +329,7 @@ class VisionTransformer(nn.Module):
         drop_rate=0.0,
         attn_drop_rate=0.0,
         drop_path_rate=0.0,
-        norm_layer=nn.LayerNorm,
+        norm_layer=LayerNorm,
         **kwargs
     ):
         super().__init__()
@@ -412,7 +437,7 @@ def ViT(params, **kwargs):
         num_heads=params.num_heads,
         mlp_ratio=4,
         qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        norm_layer=partial(LayerNorm, eps=1e-6),
         drop_path_rate=params.dropout,
         drop_rate=params.dropout,
         attn_drop_rate=params.dropout,

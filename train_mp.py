@@ -56,8 +56,10 @@ def train(params, args, local_rank, world_rank, world_size):
 
     # create model
     if params.model_backend == 'transformer-engine':
+        logging.info("using transformer-engine backend")
         model = vit_te.ViT(params).to(device)
     else:  
+        logging.info("using native backend")
         model = vit.ViT(params).to(device)
 
     if params.enable_jit:
