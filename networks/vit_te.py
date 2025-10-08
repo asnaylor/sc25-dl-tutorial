@@ -219,21 +219,20 @@ class Attention(nn.Module):
         return x
 
 class LayerNorm(nn.Module):
-    def __init__(self, normalized_shape, comm_tp_name="tp", comm_cp_name="cp", eps=1e-05, elementwise_affine=True, bias=True):
+    def __init__(self, normalized_shape, comm_tp_name="tp", comm_cp_name="cp", eps=1e-05, elementwise_affine=True):
         super().__init__()
 
         if elementwise_affine:
             self.norm = te.LayerNorm(
                 normalized_shape, 
                 eps=eps, 
-                bias=bias
             )
         else:
             self.norm = nn.LayerNorm(
                 normalized_shape, 
                 eps=eps, 
                 elementwise_affine=False,
-                bias=bias
+                bias=True
         )
 
         if elementwise_affine and (comm.get_size("tp-cp") > 1):
@@ -241,7 +240,7 @@ class LayerNorm(nn.Module):
             # across all groups
             self.norm.weight.is_shared_mp = [comm_tp_name, comm_cp_name]
             self.norm.weight.mark_for_reduction = [comm_cp_name]
-            if bias:
+            if self.norm.bias is not None:
                 self.norm.bias.is_shared_mp = [comm_tp_name, comm_cp_name]
                 self.norm.bias.mark_for_reduction = [comm_cp_name]
 
