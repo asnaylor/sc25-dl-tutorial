@@ -236,7 +236,10 @@ class VisionTransformer(nn.Module):
             ]
         )
 
-        self.norm = norm_layer(embed_dim)
+        if (comm.get_size("tp-cp")) > 1:
+            self.norm = DistributedLayerNorm(embed_dim, comm_tp_name="tp", comm_cp_name="cp")
+        else:   
+            self.norm = norm_layer(embed_dim)
 
         self.out_size = self.out_ch * self.patch_size * self.patch_size
 

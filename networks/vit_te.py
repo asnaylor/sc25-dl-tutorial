@@ -245,7 +245,7 @@ class LayerNorm(nn.Module):
                 self.norm.bias.mark_for_reduction = [comm_cp_name]
 
     def forward(self, x):
-        return self.norm(x)
+        return self.norm(x.contiguous())
 
 
 class Block(nn.Module):
@@ -372,6 +372,8 @@ class VisionTransformer(nn.Module):
             ]
         )
 
+        self.norm = norm_layer(embed_dim, comm_tp_name="tp", comm_cp_name="cp")
+
         self.out_size = self.out_ch * self.patch_size * self.patch_size
 
         self.head = nn.Linear(embed_dim, self.out_size, bias=False)
@@ -384,9 +386,18 @@ class VisionTransformer(nn.Module):
             trunc_normal_(m.weight, std=0.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+        elif isinstance(m, te.Linear):
+            trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, te.LayerNorm):
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+            if m.weight is not None:
+                nn.init.constant_(m.weight, 1.0)
 
     def prepare_tokens(self, x):
         B, nc, h, w = x.shape
@@ -417,6 +428,8 @@ class VisionTransformer(nn.Module):
         # if cp is on, each block operates on a sequence shard
         for blk in self.blocks:
             x = blk(x)
+
+        x = self.norm(x)
 
         # gather sequence if cp is on
         x = gather_from_parallel_region(x, dim=1, shapes=self.cp_shapes, comm_name="cp")
