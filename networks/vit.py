@@ -109,6 +109,8 @@ class Block(nn.Module):
             # model parallelism is on, distribute the layers
             # tp: tensor parallel shards the weights
             # cp: context parallel shards the sequence
+            self.norm1 = DistributedLayerNorm(dim, comm_tp_name="tp", comm_cp_name="cp")
+            self.norm2 = DistributedLayerNorm(dim, comm_tp_name="tp", comm_cp_name="cp")
             self.attn = DistributedAttention(
                 dim,
                 num_heads=num_heads,
@@ -127,8 +129,6 @@ class Block(nn.Module):
                 comm_tp_name="tp",
                 comm_cp_name="cp",
             )
-            self.norm1 = DistributedLayerNorm(dim, comm_tp_name="tp", comm_cp_name="cp")
-            self.norm2 = DistributedLayerNorm(dim, comm_tp_name="tp", comm_cp_name="cp")
         else:
             self.norm1 = norm_layer(dim)
             self.norm2 = norm_layer(dim)
