@@ -111,21 +111,20 @@ def init_process_group():
     master_address = os.getenv("MASTER_ADDR")
     local_rank = int(os.getenv("LOCAL_RANK", 0))
 
-    if world_size > 1:
-        with disable_logging():
-            # create tcp store
-            store = dist.TCPStore(
-                host_name=master_address,
-                port=port,
-                world_size=world_size,
-                is_master=(world_rank == 0),
-                timeout=dt.timedelta(seconds=900),
-            )
+    with disable_logging():
+        # create tcp store
+        store = dist.TCPStore(
+            host_name=master_address,
+            port=port,
+            world_size=world_size,
+            is_master=(world_rank == 0),
+            timeout=dt.timedelta(seconds=900),
+        )
 
-            # initialize process groups
-            dist.init_process_group(
-                backend="nccl", rank=world_rank, world_size=world_size, store=store
-            )
+        # initialize process groups
+        dist.init_process_group(
+            backend="nccl", rank=world_rank, world_size=world_size, store=store
+        )
 
 
 def init_model_parallel_info(tp=1, pp=1, dp=1, cp=1, order="tp-dp", verbose=False):
