@@ -6,13 +6,13 @@
 #SBATCH --cpus-per-task 32
 #SBATCH --gpus-per-node 4
 #SBATCH --time=01:00:00
-#SBATCH --image=nersc/pytorch:24.08.01
+#SBATCH --image=nersc/pytorch:25.06.01
 #SBATCH --module=gpu,nccl-plugin
-#SBATCH -J vit-era5
+#SBATCH -J vit-era5-dp
 #SBATCH -o %x-%j.out
 
-DATADIR=/pscratch/sd/s/shas1693/data/sc24_tutorial_data
-LOGDIR=${SCRATCH}/sc24-dl-tutorial/logs
+DATADIR=/pscratch/sd/s/shas1693/data/sc25_tutorial_data
+LOGDIR=${SCRATCH}/sc25-dl-tutorial/logs
 mkdir -p ${LOGDIR}
 args="${@}"
 

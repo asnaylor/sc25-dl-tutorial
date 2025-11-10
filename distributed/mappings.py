@@ -9,11 +9,11 @@ from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
 # helper functions
 from distributed.helpers import (
-     _reduce,
-     _split,
-     _gather,
-     _reduce_scatter,
-     compute_split_shapes
+    _reduce,
+    _split,
+    _gather,
+    _reduce_scatter,
+    compute_split_shapes,
 )
 
 
@@ -26,7 +26,7 @@ class _CopyToParallelRegion(torch.autograd.Function):
         return input_
 
     @staticmethod
-    def forward(ctx, input_, comm_name_): 
+    def forward(ctx, input_, comm_name_):
         ctx.comm_name = comm_name_
         return input_
 
@@ -44,12 +44,13 @@ class _ReduceFromParallelRegion(torch.autograd.Function):
         return _reduce(input_, comm_name=comm_name_)
 
     @staticmethod
-    def forward(ctx, input_, comm_name_):  
+    def forward(ctx, input_, comm_name_):
         return _reduce(input_, comm_name=comm_name_)
 
     @staticmethod
-    def backward(ctx, grad_output): 
+    def backward(ctx, grad_output):
         return grad_output, None
+
 
 class _GatherFromParallelRegion(torch.autograd.Function):
     """Gather the input and keep it on the rank."""
@@ -68,7 +69,7 @@ class _GatherFromParallelRegion(torch.autograd.Function):
     def backward(ctx, grad_output):
         return _split(grad_output, ctx.dim, ctx.comm_name), None, None, None
 
-        
+
 class _ScatterToParallelRegion(torch.autograd.Function):
     """Split the input and keep only the corresponding chunk to the rank."""
 
@@ -87,7 +88,12 @@ class _ScatterToParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return _gather(grad_output, ctx.dim, ctx.split_shapes, ctx.comm_name), None, None
+        return (
+            _gather(grad_output, ctx.dim, ctx.split_shapes, ctx.comm_name),
+            None,
+            None,
+        )
+
 
 class _ReduceScatterToParallelRegion(torch.autograd.Function):
     """Reduce the inputs and scatter to ranks."""
@@ -107,7 +113,12 @@ class _ReduceScatterToParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return _gather(grad_output, ctx.dim, ctx.split_shapes, ctx.comm_name), None, None
+        return (
+            _gather(grad_output, ctx.dim, ctx.split_shapes, ctx.comm_name),
+            None,
+            None,
+        )
+
 
 class _AllGatherFromParallelRegion(torch.autograd.Function):
     """Reduce the inputs and scatter to ranks."""
@@ -126,20 +137,27 @@ class _AllGatherFromParallelRegion(torch.autograd.Function):
     def backward(ctx, grad_output):
         return _reduce_scatter(grad_output, ctx.dim, ctx.comm_name), None, None, None
 
-     
+
 # matmul parallel
+@torch.compiler.disable
 def copy_to_parallel_region(input_, comm_name):
     """Parallel copy helper"""
     return _CopyToParallelRegion.apply(input_, comm_name)
 
+
+@torch.compiler.disable
 def reduce_from_parallel_region(input_, comm_name):
     """Parallel reduction helper"""
     return _ReduceFromParallelRegion.apply(input_, comm_name)
 
+
+@torch.compiler.disable
 def gather_from_parallel_region(input_, dim, shapes, comm_name):
     """Parallel gather helper"""
     return _GatherFromParallelRegion.apply(input_, dim, shapes, comm_name)
 
+
+@torch.compiler.disable
 def all_gather_from_parallel_region(input_, dim, shapes, comm_name):
     """
     Parallel allgather helper that combines reduce-scatter
@@ -147,68 +165,87 @@ def all_gather_from_parallel_region(input_, dim, shapes, comm_name):
     """
     return _AllGatherFromParallelRegion.apply(input_, dim, shapes, comm_name)
 
+
+@torch.compiler.disable
 def reduce_scatter_to_parallel_region(input_, dim, shapes, comm_name):
     """Parallel reduce scatter helper"""
     return _ReduceScatterToParallelRegion.apply(input_, dim, shapes, comm_name)
 
+
+@torch.compiler.disable
 def scatter_to_parallel_region(input_, dim, comm_name):
     """Parallel scatter helper"""
     return _ScatterToParallelRegion.apply(input_, dim, comm_name)
 
-def init_ddp_model_and_reduction_hooks(model,
-                                       device_ids,
-                                       output_device,
-                                       bucket_cap_mb = 25,
-                                       broadcast_buffers = True,
-                                       find_unused_parameters = False,
-                                       gradient_as_bucket_view = True,
-                                       static_graph = False):
+
+def init_ddp_model_and_reduction_hooks(
+    model,
+    device_ids,
+    output_device,
+    bucket_cap_mb=25,
+    broadcast_buffers=True,
+    find_unused_parameters=False,
+    gradient_as_bucket_view=True,
+    static_graph=False,
+):
     # early exit if we are not in a distributed setting:
     if not dist.is_initialized():
         return model
 
     need_hooks = False
     if comm.get_size("tp-cp") == 1:
-        # no model parallel, just use DDP with 
+        # no model parallel, just use DDP with
         # the full world size
         ddp_group = None
     elif comm.get_size("cp") == 1:
         # only cp requires additional allreduce
-        # if no cp, use DDP 
+        # if no cp, use DDP
         ddp_group = comm.get_group("dp")
     else:
         broadcast_buffers = False
         ddp_group = comm.get_group("dp")
-        need_hooks = True # need a grad hook for additional reduce
+        need_hooks = True  # need a grad hook for additional reduce
 
-    model = DistributedDataParallel(model,
-                                    device_ids = device_ids,
-                                    output_device = output_device,
-                                    bucket_cap_mb = bucket_cap_mb,
-                                    broadcast_buffers = broadcast_buffers,
-                                    find_unused_parameters = find_unused_parameters,
-                                    gradient_as_bucket_view = gradient_as_bucket_view,
-                                    static_graph = static_graph,
-                                    process_group = ddp_group)
+    model = DistributedDataParallel(
+        model,
+        device_ids=device_ids,
+        output_device=output_device,
+        bucket_cap_mb=bucket_cap_mb,
+        broadcast_buffers=broadcast_buffers,
+        find_unused_parameters=find_unused_parameters,
+        gradient_as_bucket_view=gradient_as_bucket_view,
+        static_graph=static_graph,
+        process_group=ddp_group,
+    )
     if not need_hooks:
         return model
 
     # define comm hook because some params need additional allreduce
-    def reduction_comm_hook(state: object, bucket: dist.GradBucket) -> torch.futures.Future[torch.Tensor]:
+    def reduction_comm_hook(
+        state: object, bucket: dist.GradBucket
+    ) -> torch.futures.Future[torch.Tensor]:
         # allreduce everything first
         buff = bucket.buffer()
         # get future for allreduce
 
-        # do the normal DDP all reduce 
-        fut = dist.all_reduce(buff, op=dist.ReduceOp.AVG, group=comm.get_group("dp"), async_op=True).get_future()
+        # do the normal DDP all reduce
+        fut = dist.all_reduce(
+            buff, op=dist.ReduceOp.AVG, group=comm.get_group("dp"), async_op=True
+        ).get_future()
 
         # get grads for shared weights
         params = bucket.parameters()
+
         def grad_reduction(fut, grads, group):
             # reduce remaining gradients
             coalesced = _flatten_dense_tensors(grads)
             # extra allreduce for param wgrads that need it
-            dist.all_reduce(coalesced, op=dist.ReduceOp.SUM, group=comm.get_group(group), async_op=False)
+            dist.all_reduce(
+                coalesced,
+                op=dist.ReduceOp.SUM,
+                group=comm.get_group(group),
+                async_op=False,
+            )
             for buf, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
                 buf.copy_(synced)
             return bucket.buffer()

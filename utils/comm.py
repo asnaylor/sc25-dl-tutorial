@@ -111,21 +111,20 @@ def init_process_group():
     master_address = os.getenv("MASTER_ADDR")
     local_rank = int(os.getenv("LOCAL_RANK", 0))
 
-    if world_size > 1:
-        with disable_logging():
-            # create tcp store
-            store = dist.TCPStore(
-                host_name=master_address,
-                port=port,
-                world_size=world_size,
-                is_master=(world_rank == 0),
-                timeout=dt.timedelta(seconds=900),
-            )
+    with disable_logging():
+        # create tcp store
+        store = dist.TCPStore(
+            host_name=master_address,
+            port=port,
+            world_size=world_size,
+            is_master=(world_rank == 0),
+            timeout=dt.timedelta(seconds=900),
+        )
 
-            # initialize process groups
-            dist.init_process_group(
-                backend="nccl", rank=world_rank, world_size=world_size, store=store
-            )
+        # initialize process groups
+        dist.init_process_group(
+            backend="nccl", rank=world_rank, world_size=world_size, store=store
+        )
 
 
 def init_model_parallel_info(tp=1, pp=1, dp=1, cp=1, order="tp-dp", verbose=False):
@@ -158,19 +157,20 @@ def init_model_parallel_info(tp=1, pp=1, dp=1, cp=1, order="tp-dp", verbose=Fals
             if world_rank in ranks:
                 _COMM_GROUPS[grp] = group
 
+
 def process_comm_list(input_list):
-    ''' Given a list of comms, merge them 
-    Ex: ['tp', 'cp'] is ['tp-cp'] 
-    '''
+    """Given a list of comms, merge them
+    Ex: ['tp', 'cp'] is ['tp-cp']
+    """
     if not input_list or all(item is None for item in input_list):
         return []
-    
+
     # filter out None values (ex: [None, 'tp] becomes ['tp'])
     filtered_list = [item for item in input_list if item is not None]
-    
+
     if not filtered_list:
         return []
     elif len(filtered_list) == 1:
         return filtered_list
     else:
-        return ['-'.join(filtered_list)]
+        return ["-".join(filtered_list)]
