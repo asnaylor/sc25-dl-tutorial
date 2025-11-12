@@ -414,11 +414,46 @@ sbatch -N 4 submit_pm_dp.sh --config=bs256_opt
 sbatch -N 16 submit_pm_dp.sh --config=bs1024_opt
 ```
 
+For example, with BS64 on 4 GPUs, you would see much faster throughput (around 200 samples/s) due to more GPUs:
+```
+2025-11-11 10:32:41,169 - root - INFO - Time taken for epoch 1 is 225.784968 sec, avg 167.805680 samples/sec
+2025-11-11 10:32:41,280 - root - INFO -   Avg train loss=0.308010
+2025-11-11 10:33:12,681 - root - INFO -   Avg val loss=0.25076618790626526
+2025-11-11 10:33:12,682 - root - INFO -   Total validation time: 29.534873485565186 sec
+2025-11-11 10:36:18,508 - root - INFO - Time taken for epoch 2 is 185.819411 sec, avg 204.241310 samples/sec
+2025-11-11 10:36:18,510 - root - INFO -   Avg train loss=0.219615
+2025-11-11 10:36:30,895 - root - INFO -   Avg val loss=0.19705182313919067
+2025-11-11 10:36:30,895 - root - INFO -   Total validation time: 11.696704626083374 sec
+2025-11-11 10:39:38,753 - root - INFO - Time taken for epoch 3 is 187.851625 sec, avg 202.031789 samples/sec
+2025-11-11 10:39:38,755 - root - INFO -   Avg train loss=0.181791
+2025-11-11 10:39:51,162 - root - INFO -   Avg val loss=0.1697038859128952
+2025-11-11 10:39:51,163 - root - INFO -   Total validation time: 11.6270751953125 sec
+```
+
+and if you use 16 nodes (64 GPUs) with BS1024, you would see:
+```
+2025-11-11 10:54:32,122 - root - INFO - Time taken for epoch 1 is 56.093554 sec, avg 657.187814 samples/sec
+2025-11-11 10:54:32,122 - root - INFO -   Avg train loss=0.698029
+2025-11-11 10:54:51,569 - root - INFO -   Avg val loss=0.5566979646682739
+2025-11-11 10:54:51,570 - root - INFO -   Total validation time: 18.72025752067566 sec
+2025-11-11 10:55:06,301 - root - INFO - Time taken for epoch 2 is 14.726653 sec, avg 2572.750220 samples/sec
+2025-11-11 10:55:06,302 - root - INFO -   Avg train loss=0.485387
+2025-11-11 10:55:07,440 - root - INFO -   Avg val loss=0.4250652492046356
+2025-11-11 10:55:07,440 - root - INFO -   Total validation time: 0.455810546875 sec
+2025-11-11 10:55:22,333 - root - INFO - Time taken for epoch 3 is 14.889114 sec, avg 2544.677920 samples/sec
+2025-11-11 10:55:22,334 - root - INFO -   Avg train loss=0.398981
+2025-11-11 10:55:23,500 - root - INFO -   Avg val loss=0.3754423260688782
+2025-11-11 10:55:23,501 - root - INFO -   Total validation time: 0.5062005519866943 sec
+```
+
+
 Look at your new logs in Tensorboard. Compare the speed of training across runs,
 as well as the loss and RMSE metrics. You can toggle the horizontol axis to show relative time
 to view timing differences.
 
-Quiz questions:
+You can also use our example saved logs and download them from [our SC25 tensorboard logs](https://portal.nersc.gov/project/dasrepo/sc25_logs/)
+
+Quick questions:
 
 - *As you scale up to more GPUs and larger batch sizes, what speedups do you observe in
   the rate of samples processed? How about in the rate of convergence?*
@@ -429,6 +464,27 @@ Quiz questions:
 
 Here is a screenshot of tensorboard showing the RMSE vs relative time for the suggested configs.
 ![data_parallel_timings](tutorial_images/dp_timings.png)
+
+You can also profile the data parallel jobs similar to the single GPU profiling section above. You can use the `bs64_opt_short` config for this to limit the number of samples (else the profile will be too large). For example, you can run:
+```
+ENABLE_PROFILING=1 PROFILE_OUTPUT=dp_bs64 sbatch -N 1 submit_pm_dp.sh --config=bs64_opt_short --run_num=profile
+```
+
+See if you can spot where the weight gradients are synced in the profile. Also, note if it's happening at the same time as any compute. 
+
+Here's an example zoomed in profile for BS64 (by default the profile will happen only on a single rank but you can save profiles from all ranks as well to look at the difference among different ranks)
+
+![NSYS DP BS64](tutorial_images/nsys_dp.png)
+
+You can play with the `bucket_cap_mb` parameter to see how it affects the profile. Smaller values will have smaller bucket sizes for the all-reduce and hence you should see more frequent syncs. For example, you can run:
+
+```
+ENABLE_PROFILING=1 PROFILE_OUTPUT=dp_bs64_bcap2 sbatch -N 1 submit_pm_dp.sh --config=bs64_opt_short --bucket_cap_mb=5 --run_num=profile_bcap2
+```
+
+Quick questions:
+- *What if you did not use DDP and directly called `torch.distributed.all_reduce` before the optimizer step to sync gradients? What would you expect to see in the profile?*
+
 
 ## Model parallelism
 
@@ -465,81 +521,49 @@ Now that we have our groups setup, we just have to tell PyTorch to additionally 
 The train script for model-parallel training is at [`train_mp.py`](train_mp.py). The model parallel size is defined by `tp` and `cp`. Let's first focus on just tensor parallelism `tp`. Setting the parameter `tensor_parallel` to `4`, for example, will enable 4-way tensor/model parallelism. Let's run a larger model by increasing our `embed_dim` to `1024`. The config for this is called `mp` which trains the larger model assuming a global batch size of `64` with 4 GPUs for data parallelism (hence local batch size is `16`). Let's initially try running this larger model with _no_ model parallelism by setting `tensor_parallel=1` and running it on 4 GPUs with the following command:
 
 ```
-sbatch --nodes 1 submit_pm_mp.sh --config=mp --tensor_parallel=1
+sbatch --nodes 1 submit_pm_mp.sh --config=mp --tensor_parallel=1 --run_num=tp1cp1
 ```
 
 If this job runs on 40G GPUs on Perlmutter, we can see from the logs that the job crashes with an OOM signal because the model is too big:
 
 ```
-[rank2]: return F.layer_norm(
-[rank2]: File "/usr/local/lib/python3.10/dist-packages/torch/nn/functional.py", line 2575, in layer_norm
-[rank2]: return torch.layer_norm(input, normalized_shape, weight, bias, eps, torch.backends.cudnn.enabled)
-[rank2]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 254.00 MiB. GPU 2 has a total capacity of 39.39 GiB of which 217.06 MiB is free. Including non-PyTorch memory, this process has 39.16 GiB memory in use. Of the allocated memory 31.28 GiB is allocated by PyTorch, and 155.23 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 508.00 MiB. GPU 0 has a total capacity of 39.38 GiB of which 478.12 MiB is free. Including non-PyTorch memory, this process has 38.89 GiB memory in use. Of the allocated memory 32.00 GiB is allocated by PyTorch, and 333.01 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
 ```
 
 If we run it on an 80G GPU, we can see the estimated memory usage to be around 45GB and hence just overflows the 40G GPU. While this example is instructive, larger models (and/or larger inputs) can push the memory consumption significantly higher.
 
-```
-2024-11-12 03:19:21,713 - root - INFO - Scaffolding memory high watermark: 10.4781494140625 GB.
-2024-11-12 03:19:21,713 - root - INFO - Starting Training Loop...
-2024-11-12 03:19:33,484 - root - INFO -  Memory usage after forward pass: 43.8121337890625 GB.
-2024-11-12 03:26:17,970 - root - INFO - Time taken for epoch 1 is 408.470099 sec, avg 92.755871 samples/sec
-2024-11-12 03:26:17,971 - root - INFO - Avg train loss=0.337123
-2024-11-12 03:26:30,450 - root - INFO - Avg val loss=0.2503761947154999
-2024-11-12 03:26:30,450 - root - INFO - Total validation time: 11.740140676498413 sec
-2024-11-12 03:26:31,303 - root - INFO -  Memory usage after forward pass: 44.9293212890625 GB.
-2024-11-12 03:33:17,521 - root - INFO - Time taken for epoch 2 is 406.931129 sec, avg 93.263939 samples/sec
-2024-11-12 03:33:17,522 - root - INFO - Avg train loss=0.205674
-2024-11-12 03:33:29,642 - root - INFO - Avg val loss=0.17378553748130798
-2024-11-12 03:33:29,643 - root - INFO - Total validation time: 11.538096904754639 sec
-2024-11-12 03:33:30,357 - root - INFO -  Memory usage after forward pass: 44.92926025390625 GB.
-2024-11-12 03:40:17,059 - root - INFO - Time taken for epoch 3 is 407.408527 sec, avg 93.154653 samples/sec
-2024-11-12 03:40:17,061 - root - INFO - Avg train loss=0.159756
-2024-11-12 03:40:28,331 - root - INFO - Avg val loss=0.14955200254917145
-2024-11-12 03:40:28,331 - root - INFO - Total validation time: 10.673660039901733 sec
-2024-11-12 03:40:29,132 - root - INFO -  Memory usage after forward pass: 44.92926025390625 GB.
-2024-11-12 03:47:16,095 - root - INFO - Time taken for epoch 4 is 407.678463 sec, avg 93.092973 samples/sec
-2024-11-12 03:47:16,098 - root - INFO - Avg train loss=0.142359
-2024-11-12 03:47:27,502 - root - INFO - Avg val loss=0.13798236846923828
-2024-11-12 03:47:27,503 - root - INFO - Total validation time: 10.814826250076294 sec
-```
 
 Let's run it with `tensor_parallel=4`, which will partition/shard the hidden dimensions of the MLP weights and biases as well as the attention heads.
 
 Note here that 4 GPUs are used for model parallelism. Recall our global batch size is `64`. How many GPUs do we need? We also want 4-way data parallel, in addition to model parallelism, here: therefore, we should run on 16 GPUs (or 4 nodes on Perlmutter). Remember that we are assuming `tp x dp` GPUs always. Run this config with the command:
 
 ```
-sbatch --nodes 4 submit_pm_mp.sh --config=mp --tensor_parallel=4
+sbatch --nodes 4 submit_pm_mp.sh --config=mp --tensor_parallel=4 --run_num=tp4cp1
 ```
 
 ```
-2024-11-08 12:51:44,863 - root - INFO - Scaffolding memory high watermark: 10.18255615234375 GB.
-2024-11-08 12:51:44,863 - root - INFO - Starting Training Loop...
-2024-11-08 12:51:55,190 - root - INFO -  Memory usage after forward pass: 31.68060302734375 GB.
-2024-11-08 12:56:57,607 - root - INFO - Time taken for epoch 1 is 306.602160 sec, avg 123.573820 samples/sec
-2024-11-08 12:56:57,615 - root - INFO - Avg train loss=0.330712
-2024-11-08 12:57:08,415 - root - INFO - Avg val loss=0.243482768535614
-2024-11-08 12:57:08,415 - root - INFO - Total validation time: 9.684647560119629 sec
-2024-11-08 12:57:09,020 - root - INFO -  Memory usage after forward pass: 33.2371826171875 GB.
-2024-11-08 13:02:12,319 - root - INFO - Time taken for epoch 2 is 303.860505 sec, avg 124.899417 samples/sec
-2024-11-08 13:02:12,321 - root - INFO - Avg train loss=0.202910
-2024-11-08 13:02:21,699 - root - INFO - Avg val loss=0.17602449655532837
-2024-11-08 13:02:21,700 - root - INFO - Total validation time: 8.193148374557495 sec
-2024-11-08 13:02:22,273 - root - INFO -  Memory usage after forward pass: 33.2371826171875 GB.
-2024-11-08 13:07:25,039 - root - INFO - Time taken for epoch 3 is 303.334088 sec, avg 125.116172 samples/sec
-2024-11-08 13:07:25,040 - root - INFO - Avg train loss=0.160378
-2024-11-08 13:07:33,786 - root - INFO - Avg val loss=0.1508728265762329
-2024-11-08 13:07:33,786 - root - INFO - Total validation time: 7.953559875488281 sec
-2024-11-08 13:07:34,361 - root - INFO -  Memory usage after forward pass: 33.2371826171875 GB.
-2024-11-08 13:12:37,045 - root - INFO - Time taken for epoch 4 is 303.251674 sec, avg 125.150175 samples/sec
-2024-11-08 13:12:37,045 - root - INFO - Avg train loss=0.142304
-2024-11-08 13:12:46,440 - root - INFO - Avg val loss=0.13786984980106354
-2024-11-08 13:12:46,440 - root - INFO - Total validation time: 7.972141742706299 sec
+2025-11-11 17:48:32,573 - root - INFO -  Memory usage after forward pass: 28.6424560546875 GB.
+2025-11-11 17:53:31,612 - root - INFO - Time taken for epoch 1 is 301.890294 sec, avg 125.502544 samples/sec
+2025-11-11 17:53:31,614 - root - INFO -   Avg train loss=0.331208
+2025-11-11 17:53:43,511 - root - INFO -   Avg val loss=0.24403679370880127
+2025-11-11 17:53:43,512 - root - INFO -   Total validation time: 10.686778783798218 sec
+2025-11-11 17:53:44,073 - root - INFO -  Memory usage after forward pass: 29.2655029296875 GB.
+2025-11-11 17:58:43,811 - root - INFO - Time taken for epoch 2 is 300.292863 sec, avg 126.383290 samples/sec
+2025-11-11 17:58:44,031 - root - INFO -   Avg train loss=0.204494
+2025-11-11 17:58:55,053 - root - INFO -   Avg val loss=0.17499171197414398
+2025-11-11 17:58:55,054 - root - INFO -   Total validation time: 10.495761156082153 sec
+2025-11-11 17:58:55,648 - root - INFO -  Memory usage after forward pass: 29.2655029296875 GB.
+2025-11-11 18:03:55,354 - root - INFO - Time taken for epoch 3 is 300.250531 sec, avg 126.401109 samples/sec
+2025-11-11 18:03:55,356 - root - INFO -   Avg train loss=0.159383
+2025-11-11 18:04:06,428 - root - INFO -   Avg val loss=0.15165293216705322
+2025-11-11 18:04:06,428 - root - INFO -   Total validation time: 9.85232949256897 sec
+2025-11-11 18:04:07,252 - root - INFO -  Memory usage after forward pass: 29.2655029296875 GB.
+
 ```
 
   
 
-We see that the memory has reduced to 33.2G. Also note that the throughput is higher.
+We see that the memory has reduced to 29G. Also note that the throughput is higher.
 
   
 
@@ -554,6 +578,27 @@ You can try out similar data parallel scaling configs for this model as well. He
   
 *Question: Can we drop the memory consumed more? What tensors have we left un-partitioned?*
 
+### Using Transformer Engine for faster model parallelism
+If your model is a vanilla transformer that mirrors a language model (so, the transformer ingests a 1D sequence of tokens), then you can use [Transformer Engine (TE)](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/index.html), an optimized library from NVIDIA that implements highly efficient transformer operations (linear layers, attention layers, etc.) along with tensor and context parallelism that are optimized for the least communication overhead. 
+
+In our example, the ViT flattens the input into a 1D sequence of tokens. Hence, the Transformer Engine can be directly used to implement the model parallelism with minimal code changes. However, note that if your model does not fit into standard LLM training patterns, then you might need significant changes and might be unable to use TE (the above custom model parallelism is still valid and can be used whenever custom implementations are needed).
+
+TE layers have simple usage patterns. For example, to make the linear layer tensor parallel, you would use the following call:
+
+```
+self.fc1 = te.Linear(
+            in_features,
+            hidden_features,
+            bias=True,
+            sequence_parallel=False,
+            tp_group=comm.get_group("tp"),
+            tp_size=comm.get_size("tp"),
+            parallel_mode="column",
+            device=torch.cuda.current_device(),
+        )
+```
+
+You have to pass the TP group and tell TE whether to shard the columns or rows for weights. TE will automatically take care of sharding and the syncs as well as fuse necessary operations. Similarly for self-attention, you can TE's self-attention module. See [our implementation here](networks/vit_te.py#L100-L151).
 
 #### More advanced material with context parallelism (optional)
 For high resolution images (common in many scientific problems), it might be more beneficial to shard the sequence (spatial) dimension. We can do this using context parallelism. See the [Megatron-core explanation](https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/context_parallel.html) for the communication collectives we need for `cp`. Now we will use `tp x cp x dp` GPUs. For `cp`, the sequence sharding will require additional `allgather` and `reduce-scatter` operations, which we have implemented. Try running:
