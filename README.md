@@ -518,6 +518,48 @@ params.data_shard_id = comm.get_rank("dp")
 
 Now that we have our groups setup, we just have to tell PyTorch to additionally communicate local results within the groups. All tensor parallel distributed utilities are at [`distributed/`](distributed/). Start off with seeing how the distributed matrix multiply is implemented here [`distributed/layers.py`]. Note that there is a call to `reduce_from_parallel_region()` which does an `all_reduce` of the partial sums. Note that you will need to implement both the forward and backward functions for this new operation that will be used to evaluate and compute the gradient seamlessly. We can do this easily in PyTorch by adding our custom `autograd.Function` class in PyTorch.  This is implemented in [`distributed/mappings.py`](distributed/mappings.py). See the [PyTorch docs](https://pytorch.org/docs/stable/notes/extending.html#how-to-use) for the steps to do this. Check out the `copy_to_parallel_region()` function as well and see the forward and backward operations for them and how they align with what we saw in the slides. Note that we have also implemented other routines (such as gathers and scatters) that are not used for tensor parallel but are used for context parallelism (where we shard the sequence/context dimension across another orthogonal group of GPUs using the `cp` group).
 
+### Testing model parallel code (optional)
+
+We highly recommend that whenever you are writing any model parallel code, you write some quick unit tests to verify that the distributed version of the model gives the same results for the forward and backward passes as the non-distributed version. This is a good way to catch bugs early and ensure that the distributed version is correct.
+
+We have implemented a quick example that loads an MLP and tests this in [tests/make_mlp_tensor_par.py](tests/make_mlp_tensor_par.py).  Here, you will find `MLP` and `DistributedMLP`. The `DistributedMLP` is supposed to be the tensor parallel version of the `MLP` model. However, we have not implemented it yet and hence the test will fail. 
+
+Let's try to fix it. First, let's request an interactive node to test the code by doing the following:
+
+```
+salloc --nodes 1 --qos interactive -t 30 -C gpu -A ntrain5
+```
+
+This will place you on a compute node with 4 GPUs. This is your test space where you can try things out using up to 4 GPUs. Try running the test with:
+
+```
+bash tests/run_example.sh 4
+```
+
+This will use 4 GPUs and try to run both the single and distributed MLP models on a dummy input and check if they have the same forward pass output and backward pass input gradients. Currently it will fail.
+
+*Excercise: Fill in the missing implementation details in `DistributedMLP`. You need to split the weights and take care of the syncs. If the implementation is correct, the errors should be small*
+
+Additionally, if you implement it correctly, you should see the model info showing you that the weights are split as below:
+
+```
+model:
+MLP(
+  (fc1): Linear(in_features=1024, out_features=4096, bias=False)
+  (act): GELU(approximate='none')
+  (fc2): Linear(in_features=4096, out_features=1024, bias=False)
+)
+model_distributed:
+DistributedMLP(
+  (fc1): Linear(in_features=1024, out_features=1024, bias=False)
+  (act): GELU(approximate='none')
+  (fc2): Linear(in_features=1024, out_features=1024, bias=False)
+)
+```
+
+Note that the distributed model's out_features is 1/4th of the original model's out_features when you use 4 GPUs.
+
+
 ### Running the model parallel code
 
 The train script for model-parallel training is at [`train_mp.py`](train_mp.py). The model parallel size is defined by `tp` and `cp`. Let's first focus on just tensor parallelism `tp`. Setting the parameter `tensor_parallel` to `4`, for example, will enable 4-way tensor/model parallelism. Let's run a larger model by increasing our `embed_dim` to `1024`. The config for this is called `mp` which trains the larger model assuming a global batch size of `64` with 4 GPUs for data parallelism (hence local batch size is `16`). Let's initially try running this larger model with _no_ model parallelism by setting `tensor_parallel=1` and running it on 4 GPUs with the following command:
@@ -582,7 +624,7 @@ You will see something like this if you zoomed into the NCCL sections of the pro
 
 ![NSYS MP TP4](tutorial_images/nsys_mp_tp4.png)
 
-As you can see, there are far more frequent NCCL calls in both the forward and backward passes now as we have partitione the weights across the TP GPUs. In the forward pass, these are all-reduce syncs of the activation maps and similarly in the backward pass. Additionally, the backward pass also has NCCL calls to sync the weight gradients (managed by DDP). We can see both these NCCL calls in the profile.
+As you can see, there are far more frequent NCCL calls in both the forward and backward passes now as we have partitioned the weights across the TP GPUs. In the forward pass, these are all-reduce syncs of the activation maps and similarly in the backward pass. Additionally, the backward pass also has NCCL calls to sync the weight gradients (managed by DDP). We can see both these NCCL calls in the profile.
 
 You can try out similar data parallel scaling configs for this model as well. Here's an example screenshot for three different global batch sizes:
 
@@ -703,7 +745,7 @@ You can also run CP with the TE model by using the config `mp_te`. For example, 
 sbatch --nodes=4 submit_pm_mp.sh --config=mp_te --tensor_parallel=1 --context_parallel=4 --parallel_order=cp-tp-dp --run_num=tp1cp4
 ```
 
-**Note** TE expects the local sequence lengths to be even for CP and equal on each CP rank. In our case, with CP=4, our sequence length (360 / 8 * 720 / 8 = 4050) gets split unevenly and with odd values. Hence, it is necessary to pad the sequence length to the next even value. We do this in the [vit_te.py](networks/vit_te.py#L185-L199) file. Hence, we pay a little extra compute. In general, if your workload deviates from the language model paradigm, then you may not be able to use TE directly out-of-the-box.
+**Note:** TE expects the local sequence lengths to be even for CP and equal on each CP rank. In our case, with CP=4, our sequence length (360 / 8 * 720 / 8 = 4050) gets split unevenly and with odd values. Hence, it is necessary to pad the sequence length to the next even value. We do this in the [vit_te.py](networks/vit_te.py#L185-L199) file. Hence, we pay a little extra compute. In general, if your workload deviates from the language model paradigm, then you may not be able to use TE directly out-of-the-box.
 
 
 ### Using CUDA Graphs (optional)
