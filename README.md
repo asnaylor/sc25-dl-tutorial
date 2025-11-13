@@ -717,7 +717,7 @@ To keep track of shared weights, we annotate them (see [this example](https://gi
 self.weight.is_shared_mp = ['cp'] 
 self.weight.mark_for_reduction = ['cp'] 
 ```
-Shared weights need to have the same initialization (see [our implementation here](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/helpers.py#L5-L30)). If the input activation grads are sharded, then the weight gradients for the shared weights need an additional AllReduce. Check out the [comm_hooks](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/mappings.py#L170-L243), we have implemented to do an additional AllReduce of the weight gradients across the `cp` group. 
+Shared weights need to have the same initialization (see [our implementation here](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/helpers.py#L5-L30)). If the input activation grads are sharded, then the weight gradients for the shared weights need an additional AllReduce. Check out the [comm_hooks](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/mappings.py#L224-L279), we have implemented to do an additional AllReduce of the weight gradients across the `cp` group. 
 
 With CP=4, you will see:
 
